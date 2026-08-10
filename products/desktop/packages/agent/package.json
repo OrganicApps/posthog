@@ -186,7 +186,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "commander": "^14.0.2",
     "fflate": "^0.8.2",
-    "hono": "^4.11.7",
+    "hono": "^4.12.34",
     "jsonwebtoken": "^9.0.2",
     "minimatch": "^10.0.3",
     "@modelcontextprotocol/sdk": "1.29.0",
