@@ -173,7 +173,7 @@
     "@earendil-works/pi-agent-core": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
-    "@hono/node-server": "^1.19.9",
+    "@hono/node-server": "^1.19.15",
     "@openai/codex": "0.144.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.208.0",
