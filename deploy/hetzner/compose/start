@@ -1,0 +1,6 @@
+#!/bin/bash
+# Same entrypoint bin/deploy-hobby generates dynamically — committed here as a static
+# file since deploy.sh doesn't run the upstream installer.
+./compose/wait
+./bin/migrate
+./bin/docker-server
