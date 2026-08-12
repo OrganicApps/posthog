@@ -1,0 +1,172 @@
+# Third compose layer for the Hetzner deployment — applied on top of
+# docker-compose.base.yml + docker-compose.yml (copied from docker-compose.hobby.yml)
+# by deploy.sh:
+#
+#   docker compose -f docker-compose.base.yml -f docker-compose.yml -f docker-compose.pin.yml up -d
+#
+# Two kinds of changes live here:
+#   1. Sizing/tuning for a steady ~150-200M events/month + session replay on one box
+#      (48c/96t, 256GB RAM, RAID10 NVMe) instead of the hobby defaults, which are
+#      deliberately small (single dev-container-mode Kafka broker, 1h log retention,
+#      single-partition topics).
+#   2. Digest-pinning the ~10 Rust services that upstream hardcodes to the floating
+#      `:master` tag in docker-compose.base.yml/docker-compose.hobby.yml (grep for
+#      "image: ghcr.io/posthog/posthog/.*:master" to re-check the list on every
+#      intentional upgrade — this is NOT tracked by POSTHOG_VERSION and must be
+#      refreshed by hand: `docker pull <image>:master && docker inspect --format
+#      '{{index .RepoDigests 0}}' <image>:master`).
+
+services:
+    # --- Kafka/Redpanda: hobby ships this in dev-container mode (2 shards, 3G, log
+    # retention 1h) which is fine for a laptop, not for production ingest volume. ---
+    kafka:
+        command:
+            - redpanda
+            - start
+            - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+            - --advertise-kafka-addr internal://kafka:9092,external://localhost:19092
+            - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+            - --advertise-pandaproxy-addr internal://kafka:8082,external://localhost:18082
+            - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+            - --rpc-addr kafka:33145
+            - --advertise-rpc-addr kafka:33145
+            - --smp 8
+            - --memory 16G
+            - --reserve-memory 500M
+            - --set redpanda.empty_seed_starts_cluster=false
+            - --seeds kafka:33145
+            - --set redpanda.auto_create_topics_enabled=true
+            # Safety net for any topic that lands via auto-create outside kafka-init's
+            # explicit list below (e.g. a future topic upstream adds and we haven't
+            # caught up on yet) — 1 partition would otherwise silently bottleneck it.
+            - --set redpanda.default_topic_partitions=12
+        environment:
+            KAFKA_LOG_RETENTION_MS: 604800000
+            KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+            # 7 days instead of hobby's 1h — gives real buffer if an ingestion consumer
+            # falls behind or a deploy needs a rolling restart, without materially
+            # growing disk use (this is log-segment retention, not application data).
+            KAFKA_LOG_RETENTION_HOURS: 168
+
+    # kafka-init pre-creates a fixed topic list at -p 1 -r 1 (r=1 is unavoidable with a
+    # single broker on one box). The hottest topics on the ingest path aren't in that
+    # list at all today and would rely on auto-create (now defaulting to 12 partitions
+    # via redpanda.default_topic_partitions above) — pre-creating them explicitly here
+    # avoids a race where the first real event arrives before kafka-init has run.
+    kafka-init:
+        entrypoint: /bin/sh
+        command:
+            - -c
+            - |
+                set -x
+                echo "Waiting for Kafka broker to accept connections..."
+                TIMEOUT=60
+                ELAPSED=0
+                until rpk topic list --brokers kafka:9092 2>/dev/null; do
+                    echo "Kafka broker not ready yet (elapsed: $${ELAPSED}s)..."
+                    sleep 2
+                    ELAPSED=$$((ELAPSED + 2))
+                    if [ $$ELAPSED -ge $$TIMEOUT ]; then
+                        echo "Timeout waiting for Kafka broker after $${TIMEOUT}s"
+                        rpk topic list --brokers kafka:9092 || true
+                        exit 1
+                    fi
+                done
+                echo "Kafka broker is accepting requests, creating topics..."
+                # Base hobby list (kept at -p 1, low-volume secondary topics) plus the
+                # hot ingest-path topics that hobby's own kafka-init omits, at -p 12.
+                TOPICS_LOW="clickhouse_events_json \
+                    clickhouse_ai_events_json \
+                    clickhouse_heatmap_events \
+                    clickhouse_flag_evaluations \
+                    clickhouse_ingestion_warnings \
+                    events_plugin_ingestion_ai \
+                    events_plugin_ingestion_dlq \
+                    events_plugin_ingestion_overflow \
+                    events_plugin_ingestion_async \
+                    ingestion-clientwarnings-main-1 \
+                    heatmaps_ingestion \
+                    clickhouse_groups \
+                    clickhouse_person \
+                    clickhouse_person_distinct_id \
+                    clickhouse_app_metrics2 \
+                    log_entries \
+                    clickhouse_tophog"
+                TOPICS_HOT="events_plugin_ingestion \
+                    events_plugin_ingestion_historical \
+                    session_recording_snapshot_item_events \
+                    ai_events_ingestion \
+                    logs_ingestion \
+                    metrics_ingestion \
+                    ingestion-errortracking-main"
+                for topic in $$TOPICS_LOW; do
+                    if rpk topic create "$$topic" --brokers kafka:9092 -p 1 -r 1 2>&1; then
+                        echo "Topic $$topic created successfully"
+                    elif rpk topic list --brokers kafka:9092 | grep -q "$$topic"; then
+                        echo "Topic $$topic already exists, continuing"
+                    else
+                        echo "Failed to create topic $$topic"; exit 1
+                    fi
+                done
+                for topic in $$TOPICS_HOT; do
+                    if rpk topic create "$$topic" --brokers kafka:9092 -p 12 -r 1 2>&1; then
+                        echo "Topic $$topic created successfully (12 partitions)"
+                    elif rpk topic list --brokers kafka:9092 | grep -q "$$topic"; then
+                        echo "Topic $$topic already exists, continuing"
+                    else
+                        echo "Failed to create topic $$topic"; exit 1
+                    fi
+                done
+                echo "Final topic list:"
+                rpk topic list --brokers kafka:9092
+                echo "Topics ready"
+
+    # --- ClickHouse: pin the data volume to the RAID10 mount (see bootstrap.sh) instead
+    # of an anonymous Docker volume, and cap memory inside ClickHouse's own config
+    # rather than via a Docker mem_limit, so it degrades gracefully under a heavy
+    # merge/mutation storm instead of getting OOM-killed. ---
+    clickhouse:
+        volumes:
+            - ./posthog/posthog/idl:/idl
+            - ./posthog/docker/clickhouse/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+            - ./posthog/docker/clickhouse/config.xml:/etc/clickhouse-server/config.xml
+            - ./posthog/docker/clickhouse/config.d/default.xml:/etc/clickhouse-server/config.d/default.xml
+            - ./posthog/docker/clickhouse/users.xml:/etc/clickhouse-server/users.xml
+            - ./posthog/docker/clickhouse/user_defined_function.xml:/etc/clickhouse-server/user_defined_function.xml
+            - ./posthog/posthog/user_scripts:/var/lib/clickhouse/user_scripts
+            - clickhouse-data:/var/lib/clickhouse
+
+    # --- Digest-pin the floating :master Rust images. Placeholders below MUST be
+    # replaced with real digests before the first production deploy — see the header
+    # comment. Left as :master (no digest) here means "not yet pinned", which is fine
+    # for a dry run but not for a pinned production rollout. ---
+    capture:
+        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+    replay-capture:
+        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+    capture-ai:
+        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+    capture-logs:
+        image: ghcr.io/posthog/posthog/capture-logs:master # TODO: pin to @sha256:<digest>
+    property-defs-rs:
+        image: ghcr.io/posthog/posthog/property-defs-rs:master # TODO: pin to @sha256:<digest>
+    feature-flags:
+        image: ghcr.io/posthog/posthog/feature-flags:master # TODO: pin to @sha256:<digest>
+    personhog-replica:
+        image: ghcr.io/posthog/posthog/personhog-replica:master # TODO: pin to @sha256:<digest>
+    personhog-router:
+        image: ghcr.io/posthog/posthog/personhog-router:master # TODO: pin to @sha256:<digest>
+    hypercache-server:
+        image: ghcr.io/posthog/posthog/hypercache-server:master # TODO: pin to @sha256:<digest>
+    cyclotron-janitor:
+        image: ghcr.io/posthog/posthog/cyclotron-janitor:master # TODO: pin to @sha256:<digest>
+    cymbal:
+        image: ghcr.io/posthog/posthog/cymbal:master # TODO: pin to @sha256:<digest>
+    cymbal-resolution:
+        image: ghcr.io/posthog/posthog/cymbal:master # TODO: pin to @sha256:<digest>
+
+volumes:
+    clickhouse-data:
+        driver: local-persist
+        driver_opts:
+            mountpoint: /mnt/volumes/root_clickhouse-data/_data
