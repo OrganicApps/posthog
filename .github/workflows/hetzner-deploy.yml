@@ -1,0 +1,164 @@
+name: PostHog Hetzner Deploy
+run-name: 📊 Deploy PostHog (Hetzner) → ${{ vars.DOMAIN }}
+
+env:
+  DEPLOY_DIR: "/opt/posthog-platform"
+
+on:
+  push:
+    branches:
+      - hetzner-deploy
+    paths:
+      - 'deploy/hetzner/**'
+      - '.github/workflows/hetzner-deploy.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: posthog-hetzner-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: hetzner-platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy summary
+        run: |
+          {
+            echo "### 📊 PostHog Hetzner deploy"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Domain | \`${{ vars.DOMAIN }}\` |"
+            echo "| Server | \`${{ vars.HETZNER_SERVER_IP }}\` |"
+            echo "| Ref | \`${{ github.ref_name }}\` |"
+            echo "| Triggered by | @${{ github.actor }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate required config
+        run: |
+          [ -n "${{ vars.DOMAIN }}" ] || { echo "ERROR🛑 vars.DOMAIN is empty" >&2; exit 1; }
+          [ -n "${{ vars.HETZNER_SERVER_IP }}" ] || { echo "ERROR🛑 vars.HETZNER_SERVER_IP is empty" >&2; exit 1; }
+          if [[ "${{ vars.HETZNER_SERVER_IP }}" == *","* ]]; then
+            echo "ERROR🛑 HETZNER_SERVER_IP must be a single host" >&2; exit 1
+          fi
+
+      # Robot Firewall only supports a full-ruleset replace (no discrete add/remove-rule
+      # endpoint like doctl) — GET current rules, insert our temp accept rule right before
+      # the trailing discard, POST the whole thing back.
+      - name: Open Hetzner Robot Firewall for this runner
+        id: fw_open
+        run: |
+          RUNNER_IP=$(curl -s https://ifconfig.me/ip)
+          echo "Runner IP: $RUNNER_IP"
+          echo "runner_ip=$RUNNER_IP" >> "$GITHUB_OUTPUT"
+
+          BASE_URL="https://robot-ws.your-server.de/firewall/${{ vars.HETZNER_SERVER_IP }}"
+          CURRENT=$(curl -s -u "${{ secrets.HETZNER_ROBOT_USER }}:${{ secrets.HETZNER_ROBOT_PASSWORD }}" "$BASE_URL")
+
+          # Rebuild the ruleset with our temp rule inserted right before the final discard.
+          NEW_RULES=$(echo "$CURRENT" | jq --arg ip "$RUNNER_IP" '
+            .firewall.rules.input as $rules
+            | ($rules | length - 1) as $last
+            | $rules[0:$last] + [{name:"CI temp SSH", src_ip:($ip+"/32"), dst_port:"22", protocol:"tcp", action:"accept"}] + $rules[$last:$last+1]
+          ')
+
+          FORM_ARGS=(--data-urlencode "status=active" --data-urlencode "whitelist_hos=true")
+          n=$(echo "$NEW_RULES" | jq length)
+          for i in $(seq 0 $((n - 1))); do
+            RULE=$(echo "$NEW_RULES" | jq -r ".[$i]")
+            for key in name src_ip dst_ip dst_port src_port protocol action; do
+              val=$(echo "$RULE" | jq -r --arg k "$key" '.[$k] // empty')
+              [ -n "$val" ] && FORM_ARGS+=(--data-urlencode "rules[input][$i][$key]=$val")
+            done
+          done
+
+          curl -s -u "${{ secrets.HETZNER_ROBOT_USER }}:${{ secrets.HETZNER_ROBOT_PASSWORD }}" \
+            -X POST "$BASE_URL" "${FORM_ARGS[@]}" >/dev/null
+
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -u "${{ secrets.HETZNER_ROBOT_USER }}:${{ secrets.HETZNER_ROBOT_PASSWORD }}" "$BASE_URL" | jq -r '.firewall.status')
+            [ "$STATUS" = "active" ] && { echo "Firewall active"; break; }
+            sleep 5
+          done
+
+      - name: Wait for SSH port to open
+        run: |
+          for i in $(seq 1 30); do
+            if (exec 3<>"/dev/tcp/${{ vars.HETZNER_SERVER_IP }}/22") 2>/dev/null; then
+              exec 3<&- 3>&-
+              echo "SSH is reachable"
+              exit 0
+            fi
+            echo "SSH not reachable yet, retrying ($i/30)..."
+            sleep 5
+          done
+          echo "ERROR🛑 SSH never became reachable" >&2
+          exit 1
+
+      - name: Copy deploy/hetzner to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ vars.HETZNER_SERVER_IP }}
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          source: "deploy/hetzner"
+          target: "/tmp/posthog-deploy"
+          strip_components: 1
+          overwrite: true
+
+      - name: Run bootstrap + deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+          VPN_EGRESS_IP: ${{ vars.VPN_EGRESS_IP }}
+          POSTHOG_REF: ${{ vars.POSTHOG_REF || 'hetzner-deploy' }}
+          POSTHOG_APP_TAG: ${{ vars.POSTHOG_APP_TAG || 'latest' }}
+          POSTHOG_NODE_TAG: ${{ vars.POSTHOG_NODE_TAG }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          timeout: 60s
+          command_timeout: 20m
+          host: ${{ vars.HETZNER_SERVER_IP }}
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: DOMAIN,VPN_EGRESS_IP,POSTHOG_REF,POSTHOG_APP_TAG,POSTHOG_NODE_TAG,SENTRY_DSN,ANTHROPIC_API_KEY,OPENAI_API_KEY
+          script: |
+            set -euo pipefail
+            chmod +x /tmp/posthog-deploy/hetzner/bootstrap.sh /tmp/posthog-deploy/hetzner/deploy.sh
+            echo "=== bootstrap.sh ==="
+            VPN_EGRESS_IP="$VPN_EGRESS_IP" /tmp/posthog-deploy/hetzner/bootstrap.sh
+            echo "=== deploy.sh ==="
+            DOMAIN="$DOMAIN" POSTHOG_REF="$POSTHOG_REF" POSTHOG_APP_TAG="$POSTHOG_APP_TAG" \
+              POSTHOG_NODE_TAG="${POSTHOG_NODE_TAG:-$POSTHOG_APP_TAG}" \
+              SENTRY_DSN="$SENTRY_DSN" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" OPENAI_API_KEY="$OPENAI_API_KEY" \
+              /tmp/posthog-deploy/hetzner/deploy.sh
+
+      - name: Close Hetzner Robot Firewall temp rule
+        if: always() && steps.fw_open.outputs.runner_ip != ''
+        run: |
+          RUNNER_IP="${{ steps.fw_open.outputs.runner_ip }}"
+          BASE_URL="https://robot-ws.your-server.de/firewall/${{ vars.HETZNER_SERVER_IP }}"
+          CURRENT=$(curl -s -u "${{ secrets.HETZNER_ROBOT_USER }}:${{ secrets.HETZNER_ROBOT_PASSWORD }}" "$BASE_URL")
+
+          NEW_RULES=$(echo "$CURRENT" | jq --arg ip "${RUNNER_IP}/32" '
+            .firewall.rules.input | map(select(.src_ip != $ip or .name != "CI temp SSH"))
+          ')
+
+          FORM_ARGS=(--data-urlencode "status=active" --data-urlencode "whitelist_hos=true")
+          n=$(echo "$NEW_RULES" | jq length)
+          for i in $(seq 0 $((n - 1))); do
+            RULE=$(echo "$NEW_RULES" | jq -r ".[$i]")
+            for key in name src_ip dst_ip dst_port src_port protocol action; do
+              val=$(echo "$RULE" | jq -r --arg k "$key" '.[$k] // empty')
+              [ -n "$val" ] && FORM_ARGS+=(--data-urlencode "rules[input][$i][$key]=$val")
+            done
+          done
+
+          curl -s -u "${{ secrets.HETZNER_ROBOT_USER }}:${{ secrets.HETZNER_ROBOT_PASSWORD }}" \
+            -X POST "$BASE_URL" "${FORM_ARGS[@]}" >/dev/null
+          echo "Temp SSH rule removed"
