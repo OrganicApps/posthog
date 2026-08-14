@@ -87,6 +87,41 @@ services:
     plugins:
         environment:
             LOGS_REDIS_HOST: redis7
+        restart: always
+
+    # --- Several Node ingestion services self-terminate (process.exit(0) — "Enough of
+    # this, I quit!") after repeated Redis/Kafka errors instead of crash-looping
+    # forever, as a deliberate fail-fast design. But hobby.yml (like base.yml) leaves
+    # them on `restart: on-failure`, which by definition does NOT restart a container
+    # that exits 0 — Docker treats that as an intentional, successful stop. The result:
+    # any transient blip (redis7 momentarily slow, a Kafka rebalance) permanently kills
+    # the container until the next manual `docker compose up`, with no self-healing.
+    # `restart: always` closes that gap — cheap insurance, no downside for services
+    # that are supposed to run forever.
+    ingestion-logs:
+        restart: always
+    ingestion-traces:
+        restart: always
+    ingestion-ai:
+        restart: always
+    ingestion-general:
+        restart: always
+    ingestion-sessionreplay:
+        restart: always
+    ingestion-error-tracking:
+        restart: always
+
+    # --- otel-collector has no working config in either base.yml or docker-compose.yml
+    # for a non-dev topology — base.yml's command references
+    # /etc/otel-collector-config.yaml but never mounts a file there (only
+    # docker-compose.dev.yml does, at a dev-only path), so it always fails with "no
+    # such file or directory". Nothing depends on it (it only feeds traces to jaeger,
+    # nothing consumes anything from it) and it's pure observability/tracing, not core
+    # product functionality — disabled rather than authoring a production OTel config
+    # for a feature we don't need yet.
+    otel-collector:
+        deploy:
+            replicas: 0
 
     # --- duckgres (DuckLake/DuckDB warehouse proxy) bind-mounts ./devenv/duckgres.yaml
     # with a path that assumes running from within a full repo checkout, unlike every
