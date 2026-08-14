@@ -29,6 +29,20 @@ services:
     # image nor a build context specified" — base.yml alone never gives it an image.
     # Mirrors the exact pattern hobby.yml uses for its ingestion-* siblings, and
     # replaces base.yml's dev-only placeholder ENCRYPTION_SALT_KEYS with the real one.
+    # --- Same class of upstream gap as ingestion-ai above, different mechanism: base.yml
+    # defines `migrate`/`asyncmigrationscheck` via YAML anchor (`<<: *worker`), which is
+    # a same-file merge and does NOT pick up hobby.yml's `worker:` override (that's a
+    # separate top-level service using `extends:`, which hobby.yml never does for these
+    # two) — so they inherit base's image-less `&worker` anchor and fail Compose's
+    # config validation before it ever gets to `deploy.replicas: 0`, which is what
+    # actually keeps them from running (our own compose/start runs migrations inline
+    # inside the web container instead, matching bin/deploy-hobby's own approach — these
+    # two services are never meant to start here, they just need a valid image to parse).
+    migrate:
+        image: $REGISTRY_URL:$POSTHOG_APP_TAG
+    asyncmigrationscheck:
+        image: $REGISTRY_URL:$POSTHOG_APP_TAG
+
     ingestion-ai:
         extends:
             file: docker-compose.base.yml
