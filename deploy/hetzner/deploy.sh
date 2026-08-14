@@ -20,7 +20,7 @@
 #
 set -euo pipefail
 
-: "${DOMAIN:?set DOMAIN, e.g. platform.ph.myorganicapps.com}"
+: "${DOMAIN:?set DOMAIN, e.g. ph.myorganicapps.com}"
 POSTHOG_REPO_URL="${POSTHOG_REPO_URL:-https://github.com/OrganicApps/posthog.git}"
 POSTHOG_REF="${POSTHOG_REF:-hetzner-deploy}"
 POSTHOG_APP_TAG="${POSTHOG_APP_TAG:-latest}"
