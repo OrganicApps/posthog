@@ -21,6 +21,27 @@
 #      '{{index .RepoDigests 0}}' <image>:master`).
 
 services:
+    # --- Upstream gap: docker-compose.hobby.yml overrides image+extends for every
+    # ingestion-* service EXCEPT ingestion-ai (checked: ingestion-general,
+    # ingestion-sessionreplay, recording-api, ingestion-error-tracking, ingestion-logs,
+    # ingestion-traces, capture all get it; ingestion-ai does not). Without this,
+    # `docker compose up` fails outright with "service ingestion-ai has neither an
+    # image nor a build context specified" — base.yml alone never gives it an image.
+    # Mirrors the exact pattern hobby.yml uses for its ingestion-* siblings, and
+    # replaces base.yml's dev-only placeholder ENCRYPTION_SALT_KEYS with the real one.
+    ingestion-ai:
+        extends:
+            file: docker-compose.base.yml
+            service: ingestion-ai
+        image: ${REGISTRY_URL}-node:${POSTHOG_NODE_TAG:-latest}
+        environment:
+            ENCRYPTION_SALT_KEYS: $ENCRYPTION_SALT_KEYS
+        depends_on:
+            - db
+            - redis7
+            - clickhouse
+            - kafka
+
     # --- Kafka/Redpanda: hobby ships this in dev-container mode (2 shards, 3G, log
     # retention 1h) which is fine for a laptop, not for production ingest volume. ---
     kafka:
