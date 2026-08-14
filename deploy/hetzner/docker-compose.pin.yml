@@ -76,6 +76,7 @@ services:
             - redis7
             - clickhouse
             - kafka
+        restart: always
 
     # --- plugins runs a LogsIngestionConsumer internally as one of its "combined
     # capabilities" (same as ingestion-logs does standalone), but hobby.yml's plugins
@@ -101,8 +102,6 @@ services:
     ingestion-logs:
         restart: always
     ingestion-traces:
-        restart: always
-    ingestion-ai:
         restart: always
     ingestion-general:
         restart: always
