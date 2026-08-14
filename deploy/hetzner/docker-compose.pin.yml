@@ -5,7 +5,8 @@
 #   docker compose -f docker-compose.base.yml -f docker-compose.yml -f docker-compose.pin.yml up -d
 #
 # Two kinds of changes live here:
-#   1. Sizing/tuning for the current box (AX102-1: 16c/32t, 128GB RAM, 2×NVMe RAID1)
+#   1. Sizing/tuning for the current box (Ryzen 9 5950X, 16c/32t, 128GB DDR4 ECC,
+#      2×3.84TB NVMe RAID1 — a Hetzner Server Auction listing, see ../README.md §1)
 #      instead of the hobby defaults, which are deliberately small (single
 #      dev-container-mode Kafka broker, 1h log retention, single-partition topics).
 #      This is scaled DOWN from the original ~150-200M events/month sizing target,
@@ -255,34 +256,38 @@ services:
             - ./posthog/posthog/user_scripts:/var/lib/clickhouse/user_scripts
             - clickhouse-data:/var/lib/clickhouse
 
-    # --- Digest-pin the floating :master Rust images. Placeholders below MUST be
-    # replaced with real digests before the first production deploy — see the header
-    # comment. Left as :master (no digest) here means "not yet pinned", which is fine
-    # for a dry run but not for a pinned production rollout. ---
+    # --- Digest-pinned Rust images (upstream hardcodes these to floating :master).
+    # Digests resolved via deploy/hetzner/registry/mirror-images.sh on 2026-08-14 —
+    # re-run that script and update these on every intentional upgrade; this is NOT
+    # tracked by POSTHOG_VERSION and won't move on its own. Also mirrored into the
+    # local registry (registry/docker-compose.yml) at localhost:5000/<name>:master —
+    # these pins reference the original ghcr.io digests directly rather than the
+    # mirror, so they keep working even before the stack is switched over to pull
+    # from the local registry.
     capture:
-        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
     replay-capture:
-        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
     capture-ai:
-        image: ghcr.io/posthog/posthog/capture:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
     capture-logs:
-        image: ghcr.io/posthog/posthog/capture-logs:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/capture-logs@sha256:ded0bcb8da044666d023af340ea55845a35ff78aefec0e8c9265e844bad807a6
     property-defs-rs:
-        image: ghcr.io/posthog/posthog/property-defs-rs:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/property-defs-rs@sha256:4a390f26dce2bea9f558b4440f8798ab3ec0cd47899ac5eafe3c02c642dc572a
     feature-flags:
-        image: ghcr.io/posthog/posthog/feature-flags:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/feature-flags@sha256:74727bae504f3aba19cb4513cfd6dd2b4495bc1665b2ed61d0043797bca8ad7f
     personhog-replica:
-        image: ghcr.io/posthog/posthog/personhog-replica:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/personhog-replica@sha256:4be6eba113033bdab46ac5245a8274a822019051999546e95403e575a5e4755c
     personhog-router:
-        image: ghcr.io/posthog/posthog/personhog-router:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/personhog-router@sha256:eb9de8a11f9f212300a4cba30e05c30bc8d2730de2dcaa9c5b72813c6da88e3c
     hypercache-server:
-        image: ghcr.io/posthog/posthog/hypercache-server:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/hypercache-server@sha256:2ea417040f3605941f868c903ece83ff08d13b57765de637a40208fa7d4fbaea
     cyclotron-janitor:
-        image: ghcr.io/posthog/posthog/cyclotron-janitor:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/cyclotron-janitor@sha256:3f01beadacdfa1bf8b4a715fc519768707950a168f1dd3303b91a7991f4ddec0
     cymbal:
-        image: ghcr.io/posthog/posthog/cymbal:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4
     cymbal-resolution:
-        image: ghcr.io/posthog/posthog/cymbal:master # TODO: pin to @sha256:<digest>
+        image: ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4
 
 volumes:
     clickhouse-data:
