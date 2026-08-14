@@ -1,0 +1,26 @@
+# Self-hosted Docker registry mirror — keeps a local copy of the images this stack
+# depends on (upstream posthog/posthog Docker Hub images + the floating :master
+# ghcr.io Rust images), so a deploy doesn't depend on Docker Hub/ghcr.io uptime and we
+# control exactly what image content is running.
+#
+# v1 scope: bound to 127.0.0.1 only, no auth, no TLS — safe as long as nothing outside
+# this host ever needs to pull from it. Before exposing this beyond localhost (the
+# "перенесём позже" step), add:
+#   - TLS (registry:2 supports REGISTRY_HTTP_TLS_CERTIFICATE/KEY, or put Caddy in front)
+#   - basic auth (REGISTRY_AUTH_HTPASSWD_* env vars, or delegate to Caddy)
+# Usage:
+#   cd deploy/hetzner/registry && docker compose up -d
+#   ./mirror-images.sh
+services:
+    registry:
+        image: registry:2
+        restart: unless-stopped
+        ports:
+            - '127.0.0.1:5000:5000'
+        environment:
+            REGISTRY_STORAGE_DELETE_ENABLED: 'true'
+        volumes:
+            - registry-data:/var/lib/registry
+
+volumes:
+    registry-data:
