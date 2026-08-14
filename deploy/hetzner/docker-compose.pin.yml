@@ -89,6 +89,15 @@ services:
     plugins:
         environment:
             LOGS_REDIS_HOST: redis7
+            # LogsIngestionConsumer defaults LOGS_REDIS_TLS to true whenever NODE_ENV
+            # isn't explicitly dev/test (nodejs/src/logs/config.ts, isProdEnv()) —
+            # fails open to TLS in exactly this kind of production container. redis7
+            # is plain TCP (confirmed: the sibling ingestion-redis/posthog-redis pools
+            # connect to it fine over plaintext), so a TLS ClientHello against it just
+            # hangs until connect timeout — surfaces as ETIMEDOUT, not a clear TLS
+            # error, which is what made this one hard to place. Root-caused via
+            # nodejs/src/logs/logs-ingestion-consumer.ts:334-349.
+            LOGS_REDIS_TLS: 'false'
         restart: always
 
     # --- Several Node ingestion services self-terminate (process.exit(0) — "Enough of
@@ -101,8 +110,19 @@ services:
     # `restart: always` closes that gap — cheap insurance, no downside for services
     # that are supposed to run forever.
     ingestion-logs:
+        # Same LOGS_REDIS_TLS fail-open-to-TLS issue as plugins above — this is the
+        # standalone version of the same LogsIngestionConsumer.
+        environment:
+            LOGS_REDIS_TLS: 'false'
         restart: always
     ingestion-traces:
+        # TRACES_REDIS_HOST mirrors LOGS_REDIS_HOST (base.yml sets it directly for this
+        # service) — same naming family strongly suggests the same TLS-defaults-on-in-
+        # prod footgun in whatever consumer class backs traces ingestion. Restart count
+        # matched ingestion-logs exactly (54/54) under the same crash window, consistent
+        # with the same root cause.
+        environment:
+            TRACES_REDIS_TLS: 'false'
         restart: always
     ingestion-general:
         restart: always
