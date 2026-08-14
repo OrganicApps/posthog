@@ -77,6 +77,17 @@ services:
             - clickhouse
             - kafka
 
+    # --- plugins runs a LogsIngestionConsumer internally as one of its "combined
+    # capabilities" (same as ingestion-logs does standalone), but hobby.yml's plugins
+    # override only sets CDP_REDIS_HOST/CDP_VALKEY_HOST — not LOGS_REDIS_HOST, which
+    # only the standalone ingestion-logs service gets in base.yml. Without it this
+    # internal consumer defaults to 127.0.0.1:6379, fails, and the whole plugins
+    # process exits(0) on that error — restart:on-failure doesn't retry a clean exit,
+    # so it just stays down until the next `docker compose up`.
+    plugins:
+        environment:
+            LOGS_REDIS_HOST: redis7
+
     # --- duckgres (DuckLake/DuckDB warehouse proxy) bind-mounts ./devenv/duckgres.yaml
     # with a path that assumes running from within a full repo checkout, unlike every
     # other bind-mounted config in this stack (which upstream prefixes with ./posthog/
