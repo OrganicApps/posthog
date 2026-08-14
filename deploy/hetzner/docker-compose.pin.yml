@@ -66,11 +66,30 @@ services:
         image: ${REGISTRY_URL}-node:${POSTHOG_NODE_TAG:-latest}
         environment:
             ENCRYPTION_SALT_KEYS: $ENCRYPTION_SALT_KEYS
+            # base.yml never sets this for ingestion-ai (only docker-compose.dev.yml
+            # does, for the same service) — without it, the hog-transformer's Redis
+            # pool defaults to 127.0.0.1:6379 and can never connect, crash-looping the
+            # container (ECONNREFUSED, ~5s restart loop).
+            CDP_REDIS_HOST: redis7
         depends_on:
             - db
             - redis7
             - clickhouse
             - kafka
+
+    # --- duckgres (DuckLake/DuckDB warehouse proxy) bind-mounts ./devenv/duckgres.yaml
+    # with a path that assumes running from within a full repo checkout, unlike every
+    # other bind-mounted config in this stack (which upstream prefixes with ./posthog/
+    # to match the deploy-hobby install layout — see the clickhouse volumes above).
+    # That path doesn't exist at all in our deploy root, so Docker silently creates an
+    # empty directory there instead of failing at mount time, and the container
+    # crash-loops trying to read a config "file" that's actually a directory. DuckLake
+    # is an optional warehouse feature, not required for core event capture/analytics —
+    # disabled here (same replicas:0 trick as migrate above) rather than standing up a
+    # config file for a feature we don't need.
+    duckgres:
+        deploy:
+            replicas: 0
 
     # --- Kafka/Redpanda: hobby ships this in dev-container mode (2 shards, 3G, log
     # retention 1h) which is fine for a laptop, not for production ingest volume. ---
