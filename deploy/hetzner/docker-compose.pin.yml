@@ -29,6 +29,22 @@ services:
     # image nor a build context specified" — base.yml alone never gives it an image.
     # Mirrors the exact pattern hobby.yml uses for its ingestion-* siblings, and
     # replaces base.yml's dev-only placeholder ENCRYPTION_SALT_KEYS with the real one.
+    # --- Upstream gap: docker-compose.hobby.yml redefines `objectstorage` from scratch
+    # as legacy MinIO (base.yml's own `objectstorage` is SeaweedFS-backed), but doesn't
+    # override `healthcheck:` — so it inherits base's SeaweedFS-specific healthcheck
+    # (`test -f /tmp/objectstorage-ready`, a sentinel only SeaweedFS's setup loop ever
+    # creates). MinIO's entrypoint never creates that file, so the container is always
+    # "unhealthy" even though it's actually up and serving — anything with
+    # `depends_on: objectstorage: condition: service_healthy` (e.g. ingestion-ai) then
+    # fails to start. Standard MinIO liveness endpoint instead.
+    objectstorage:
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:19000/minio/health/live']
+            interval: 5s
+            timeout: 5s
+            retries: 30
+            start_period: 10s
+
     # --- Same class of upstream gap as ingestion-ai above, different mechanism: base.yml
     # defines `migrate`/`asyncmigrationscheck` via YAML anchor (`<<: *worker`), which is
     # a same-file merge and does NOT pick up hobby.yml's `worker:` override (that's a
