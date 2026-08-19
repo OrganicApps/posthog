@@ -20,20 +20,54 @@
 #
 set -euo pipefail
 
-: "${DOMAIN:?set DOMAIN, e.g. ph.myorganicapps.com}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/posthog-platform}"
+
+# ---------------------------------------------------------------------------
+# 0. Persistent extra config/secrets — so optional values (Sentry, AI keys,
+#    Google OAuth, custom image overrides) don't need to be re-typed/re-passed
+#    on every invocation. Lives in $DEPLOY_DIR (the actual deploy root, same
+#    place as the persistent .env.secrets) — deliberately NOT in
+#    ~/hetzner-deploy, which only holds the scripts themselves and gets
+#    replaced wholesale by every scp/checkout. Uses `: "${VAR:=value}"` style
+#    assignments (see .env.extra.example) so a value explicitly passed to
+#    THIS invocation still wins over what's stored here; the file only fills
+#    in what's not already set.
+# ---------------------------------------------------------------------------
+if [ -f "$DEPLOY_DIR/.env.extra" ]; then
+    # shellcheck disable=SC1091
+    source "$DEPLOY_DIR/.env.extra"
+fi
+
+: "${DOMAIN:?set DOMAIN, e.g. example.com}"
 POSTHOG_REPO_URL="${POSTHOG_REPO_URL:-https://github.com/OrganicApps/posthog.git}"
 POSTHOG_REF="${POSTHOG_REF:-hetzner-deploy}"
 POSTHOG_APP_TAG="${POSTHOG_APP_TAG:-latest}"
 POSTHOG_NODE_TAG="${POSTHOG_NODE_TAG:-$POSTHOG_APP_TAG}"
 REGISTRY_URL="${REGISTRY_URL:-posthog/posthog}"
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/posthog-platform}"
 SESSION_RECORDING_RETENTION="${SESSION_RECORDING_RETENTION:-30d}"
 SENTRY_DSN="${SENTRY_DSN:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY="${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}"
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET="${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}"
 TLS_STAGING="${TLS_STAGING:-}"          # set to any non-empty value to use LE staging (testing only)
 HEALTH_CHECK_RETRIES="${HEALTH_CHECK_RETRIES:-60}"   # 60 * 10s = 10 minutes, matches upstream's own budget
 HEALTH_CHECK_DELAY="${HEALTH_CHECK_DELAY:-10}"
+
+# Optional per-service Rust image overrides (default: the digest pins baked into
+# docker-compose.pin.yml). Set one of these to a locally-built image — e.g.
+# CAPTURE_IMAGE=localhost:5000/capture:custom — after running
+# registry/build-and-push.sh. Left unset, docker-compose.pin.yml's own
+# ${VAR:-digest} defaults apply.
+CAPTURE_IMAGE="${CAPTURE_IMAGE:-}"
+CAPTURE_LOGS_IMAGE="${CAPTURE_LOGS_IMAGE:-}"
+PROPERTY_DEFS_RS_IMAGE="${PROPERTY_DEFS_RS_IMAGE:-}"
+FEATURE_FLAGS_IMAGE="${FEATURE_FLAGS_IMAGE:-}"
+PERSONHOG_REPLICA_IMAGE="${PERSONHOG_REPLICA_IMAGE:-}"
+PERSONHOG_ROUTER_IMAGE="${PERSONHOG_ROUTER_IMAGE:-}"
+HYPERCACHE_SERVER_IMAGE="${HYPERCACHE_SERVER_IMAGE:-}"
+CYCLOTRON_JANITOR_IMAGE="${CYCLOTRON_JANITOR_IMAGE:-}"
+CYMBAL_IMAGE="${CYMBAL_IMAGE:-}"
 
 log() { echo "[deploy] $*"; }
 
@@ -119,6 +153,17 @@ umask 077
     [ -n "$SENTRY_DSN" ] && echo "SENTRY_DSN=$SENTRY_DSN"
     [ -n "$ANTHROPIC_API_KEY" ] && echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
     [ -n "$OPENAI_API_KEY" ] && echo "OPENAI_API_KEY=$OPENAI_API_KEY"
+    [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY"
+    [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET"
+    [ -n "$CAPTURE_IMAGE" ] && echo "CAPTURE_IMAGE=$CAPTURE_IMAGE"
+    [ -n "$CAPTURE_LOGS_IMAGE" ] && echo "CAPTURE_LOGS_IMAGE=$CAPTURE_LOGS_IMAGE"
+    [ -n "$PROPERTY_DEFS_RS_IMAGE" ] && echo "PROPERTY_DEFS_RS_IMAGE=$PROPERTY_DEFS_RS_IMAGE"
+    [ -n "$FEATURE_FLAGS_IMAGE" ] && echo "FEATURE_FLAGS_IMAGE=$FEATURE_FLAGS_IMAGE"
+    [ -n "$PERSONHOG_REPLICA_IMAGE" ] && echo "PERSONHOG_REPLICA_IMAGE=$PERSONHOG_REPLICA_IMAGE"
+    [ -n "$PERSONHOG_ROUTER_IMAGE" ] && echo "PERSONHOG_ROUTER_IMAGE=$PERSONHOG_ROUTER_IMAGE"
+    [ -n "$HYPERCACHE_SERVER_IMAGE" ] && echo "HYPERCACHE_SERVER_IMAGE=$HYPERCACHE_SERVER_IMAGE"
+    [ -n "$CYCLOTRON_JANITOR_IMAGE" ] && echo "CYCLOTRON_JANITOR_IMAGE=$CYCLOTRON_JANITOR_IMAGE"
+    [ -n "$CYMBAL_IMAGE" ] && echo "CYMBAL_IMAGE=$CYMBAL_IMAGE"
 } > .env
 chmod 600 .env
 

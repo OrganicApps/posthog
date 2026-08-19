@@ -26,7 +26,30 @@ starts from a more comfortable place than the others did.
 | `deploy.sh` | Clones this repo, stages compose files, generates/preserves secrets, `docker compose up`, health-check + rollback | CI, every deploy |
 | `docker-compose.pin.yml` | Sizing/tuning overlay + digest-pins for floating `:master` images | n/a (consumed by deploy.sh) |
 | `compose/{start,wait,temporal-django-worker}` | Static copies of the entrypoint scripts `bin/deploy-hobby` normally generates | n/a |
+| `registry/mirror-images.sh` | Mirrors upstream Docker Hub/ghcr.io images into the local registry, resolves digests for pinning | You, once per intentional upgrade, on the server |
+| `registry/build-and-push.sh` | Builds all (or a subset of) images from your own checkout, pushes to the local registry | You, on the server, whenever you want to run custom code |
+| `.env.extra.example` | Template for `$DEPLOY_DIR/.env.extra` — optional secrets/config that persist across deploys instead of being re-passed every invocation | You, once, on the server (see below) |
 | `monitoring/` | Optional promtail + node-exporter → existing org Loki, not started automatically | You, manually, if wanted |
+
+### Persistent optional secrets (Sentry, AI keys, Google OAuth, custom images)
+
+`deploy.sh` only writes optional values (`SENTRY_DSN`, `ANTHROPIC_API_KEY`,
+`SOCIAL_AUTH_GOOGLE_OAUTH2_KEY`, custom `*_IMAGE` overrides, etc.) into `.env` if
+they're set in its environment *at the time it runs* — pass them once via SSH and
+they're gone from the next deploy unless re-passed. To avoid re-typing them every
+time, drop them in `$DEPLOY_DIR/.env.extra` (i.e. `/opt/posthog-platform/.env.extra`,
+**not** `~/hetzner-deploy` — that directory only holds the scripts and gets replaced
+wholesale on every scp/checkout) — `deploy.sh` sources it automatically on every run:
+
+```
+scp deploy/hetzner/.env.extra.example root@<server>:/opt/posthog-platform/.env.extra
+ssh root@<server> 'chmod 600 /opt/posthog-platform/.env.extra'
+# then edit in place with real values
+```
+
+It uses `: "${VAR:=value}"` assignments (not plain `VAR=value`) specifically so a
+value explicitly passed to one particular `deploy.sh` invocation still overrides
+what's stored here — the file only fills in what isn't already set.
 
 ## 1. Order the hardware (manual — Hetzner Robot console)
 
@@ -134,6 +157,13 @@ for `DOMAIN` already pointing at the server before this runs).
   TODOs at the bottom of that file. Do this before calling the instance production-ready;
   until then, those ~10 services will silently pick up whatever's newest on `:master` on
   every `--pull always`.
+- **Running custom code:** every image this stack runs (Django/frontend, Node, and
+  each of the 9 Rust services) can be rebuilt from your own checkout and swapped in.
+  `registry/build-and-push.sh`, run on the server from the deploy root, builds and
+  pushes all of them (or a subset via `SERVICES="..."`) to the local registry, then
+  prints the exact `deploy.sh` invocation with the right `REGISTRY_URL`/`POSTHOG_APP_TAG`/
+  `POSTHOG_NODE_TAG`/`*_IMAGE` vars set. Anything not rebuilt keeps its current default
+  (the pinned upstream digest, or a previous custom build).
 - **Run the verification steps** below.
 - **Known gap, accepted for this iteration: no automated backups.** Postgres and
   ClickHouse data on this box has no backup job. If the disk/server is lost, the data is

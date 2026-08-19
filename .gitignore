@@ -195,6 +195,7 @@ data/seaweedfs/
 !.env.development
 !.env.services
 !.env.local.example
+!.env.extra.example
 
 # Ignore Agent OS (Claude Code) files
 .claude/agents/agent-os
