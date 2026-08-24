@@ -70,6 +70,11 @@ services:
         environment:
             SOCIAL_AUTH_GOOGLE_OAUTH2_KEY: ${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}
             SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET: ${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}
+            # Off by default (matches upstream's own default) — the "New project" button is
+            # gated on preflight's can_create_org, which requires this AND a license with the
+            # ZAPIER feature (see posthog/utils.py get_can_create_org). Set to true to allow
+            # creating more than one project/org on this instance.
+            MULTI_ORG_ENABLED: ${MULTI_ORG_ENABLED:-false}
 
     ingestion-ai:
         extends:
