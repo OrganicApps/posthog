@@ -60,6 +60,17 @@ services:
     asyncmigrationscheck:
         image: $REGISTRY_URL:$POSTHOG_APP_TAG
 
+    # --- Upstream gap: docker-compose.hobby.yml's web environment block never
+    # forwards Google SSO credentials (ee/settings.py reads them as plain env vars,
+    # no code change needed) — without this, SOCIAL_AUTH_GOOGLE_OAUTH2_KEY/SECRET
+    # are always unset regardless of what's in .env. Blank default keeps Google SSO
+    # off (get_instance_available_sso_providers requires both to be truthy) until
+    # explicitly configured.
+    web:
+        environment:
+            SOCIAL_AUTH_GOOGLE_OAUTH2_KEY: ${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}
+            SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET: ${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}
+
     ingestion-ai:
         extends:
             file: docker-compose.base.yml
