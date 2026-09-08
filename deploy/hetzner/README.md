@@ -28,8 +28,32 @@ starts from a more comfortable place than the others did.
 | `compose/{start,wait,temporal-django-worker}` | Static copies of the entrypoint scripts `bin/deploy-hobby` normally generates | n/a |
 | `registry/mirror-images.sh` | Mirrors upstream Docker Hub/ghcr.io images into the local registry, resolves digests for pinning | You, once per intentional upgrade, on the server |
 | `registry/build-and-push.sh` | Builds all (or a subset of) images from your own checkout, pushes to the local registry | You, on the server, whenever you want to run custom code |
+| `registry/build-mcp.sh` | Builds the PostHog MCP server (`services/mcp`) from your checkout, pushes to the local registry | You, on the server, once before first use |
 | `.env.extra.example` | Template for `$DEPLOY_DIR/.env.extra` — optional secrets/config that persist across deploys instead of being re-passed every invocation | You, once, on the server (see below) |
 | `monitoring/` | Optional promtail + node-exporter → existing org Loki, not started automatically | You, manually, if wanted |
+
+### PostHog MCP server (AI clients querying this instance)
+
+`docker-compose.pin.yml` runs `services/mcp` (not part of upstream's hobby stack —
+PostHog hosts their own copy separately, no prebuilt image exists) as an extra `mcp`
+service, reachable at `https://mcp.$DOMAIN`, wired to this instance's own API
+(`POSTHOG_API_BASE_URL=http://web:8000`, internal). Setup:
+
+1. Add a DNS A record: `mcp.<your domain>` → this server's IP (same as the main
+   domain, just a second record — Caddy auto-provisions its own cert for it via the
+   `CADDY_EXTRA_CONFIG` extension point in `docker-compose.base.yml`, no manual TLS
+   config needed).
+2. On the server: `cd /opt/posthog-platform && ./posthog/deploy/hetzner/registry/build-mcp.sh`
+   (builds and pushes `localhost:5000/posthog-mcp:custom` — `docker-compose.pin.yml`'s
+   `mcp` service already defaults to this exact tag).
+3. Redeploy (`deploy.sh`) — brings up the `mcp` container and Caddy's new site block.
+4. Point an MCP client (Claude Desktop, Cursor, etc.) at `https://mcp.<your domain>/mcp`
+   with a personal API key from this instance (Settings → Personal API keys) as a
+   Bearer token — see `services/mcp/README.md` for client config examples (swap
+   `mcp.posthog.com` for your own domain).
+
+Session state uses `redis7` (DB index 5, not a dedicated Redis container) — a
+non-critical cache, not worth a whole extra service for.
 
 ### Persistent optional secrets (Sentry, AI keys, Google OAuth, custom images)
 
