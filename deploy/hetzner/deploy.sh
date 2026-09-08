@@ -60,6 +60,7 @@ HEALTH_CHECK_DELAY="${HEALTH_CHECK_DELAY:-10}"
 # CAPTURE_IMAGE=localhost:5000/capture:custom — after running
 # registry/build-and-push.sh. Left unset, docker-compose.pin.yml's own
 # ${VAR:-digest} defaults apply.
+MCP_IMAGE="${MCP_IMAGE:-}"
 CAPTURE_IMAGE="${CAPTURE_IMAGE:-}"
 CAPTURE_LOGS_IMAGE="${CAPTURE_LOGS_IMAGE:-}"
 PROPERTY_DEFS_RS_IMAGE="${PROPERTY_DEFS_RS_IMAGE:-}"
@@ -112,23 +113,29 @@ if [ ! -f ./share/GeoLite2-City.mmdb ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Secrets — generated once, never regenerated on a live instance
+# 4. Secrets — generated once each, never regenerated on a live instance. Each
+#    key is checked independently (not "file exists ? skip all : generate all")
+#    so a secret added in a later version of this script gets appended to an
+#    existing .env.secrets on next deploy, without touching the ones already
+#    there — losing/rotating POSTHOG_SECRET or ENCRYPTION_SALT_KEYS invalidates
+#    sessions and encrypted DB fields, so that guard has to hold per-key forever.
 # ---------------------------------------------------------------------------
-if [ -f .env.secrets ]; then
-    log "Existing .env.secrets found, preserving (never regenerated)"
-else
-    log "Generating .env.secrets (first install)"
-    POSTHOG_SECRET=$(head -c 28 /dev/urandom | sha224sum -b | head -c 56)
-    ENCRYPTION_SALT_KEYS=$(openssl rand -hex 16)
-    BROWSERLESS_SECRET=$(openssl rand -hex 32)
-    umask 077
-    cat > .env.secrets <<EOF
-POSTHOG_SECRET=$POSTHOG_SECRET
-ENCRYPTION_SALT_KEYS=$ENCRYPTION_SALT_KEYS
-BROWSERLESS_SECRET=$BROWSERLESS_SECRET
-EOF
-    chmod 600 .env.secrets
-fi
+touch .env.secrets
+umask 077
+chmod 600 .env.secrets
+
+ensure_secret() {
+    local key="$1" value="$2"
+    if ! grep -q "^${key}=" .env.secrets 2>/dev/null; then
+        log "Generating $key (first time this deploy tooling has needed it)"
+        echo "${key}=${value}" >> .env.secrets
+    fi
+}
+
+ensure_secret POSTHOG_SECRET "$(head -c 28 /dev/urandom | sha224sum -b | head -c 56)"
+ensure_secret ENCRYPTION_SALT_KEYS "$(openssl rand -hex 16)"
+ensure_secret BROWSERLESS_SECRET "$(openssl rand -hex 32)"
+ensure_secret MCP_SIGNED_STATE_KEY "$(openssl rand -hex 32)"
 
 # ---------------------------------------------------------------------------
 # 5. Rebuild .env every deploy: persisted secrets + this run's config. Save the
@@ -157,6 +164,7 @@ umask 077
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY"
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET"
     [ -n "$MULTI_ORG_ENABLED" ] && echo "MULTI_ORG_ENABLED=$MULTI_ORG_ENABLED"
+    [ -n "$MCP_IMAGE" ] && echo "MCP_IMAGE=$MCP_IMAGE"
     [ -n "$CAPTURE_IMAGE" ] && echo "CAPTURE_IMAGE=$CAPTURE_IMAGE"
     [ -n "$CAPTURE_LOGS_IMAGE" ] && echo "CAPTURE_LOGS_IMAGE=$CAPTURE_LOGS_IMAGE"
     [ -n "$PROPERTY_DEFS_RS_IMAGE" ] && echo "PROPERTY_DEFS_RS_IMAGE=$PROPERTY_DEFS_RS_IMAGE"
