@@ -300,30 +300,68 @@ services:
     # these pins reference the original ghcr.io digests directly rather than the
     # mirror, so they keep working even before the stack is switched over to pull
     # from the local registry.
+    #
+    # Each service's image is env-overridable (default: the pinned upstream digest
+    # above), the same pattern already used for posthog/posthog-node. To run a
+    # locally-built custom image instead, set e.g. CAPTURE_IMAGE=localhost:5000/capture:custom
+    # — see registry/build-and-push.sh, which builds and pushes all of these.
     capture:
-        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
+        image: ${CAPTURE_IMAGE:-ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1}
     replay-capture:
-        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
+        image: ${CAPTURE_IMAGE:-ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1}
     capture-ai:
-        image: ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1
+        image: ${CAPTURE_IMAGE:-ghcr.io/posthog/posthog/capture@sha256:b8dcf4d1a3c04a5276be8bddfc55fd1e696f07215f0063e474b4c6d3bae9fab1}
     capture-logs:
-        image: ghcr.io/posthog/posthog/capture-logs@sha256:ded0bcb8da044666d023af340ea55845a35ff78aefec0e8c9265e844bad807a6
+        image: ${CAPTURE_LOGS_IMAGE:-ghcr.io/posthog/posthog/capture-logs@sha256:ded0bcb8da044666d023af340ea55845a35ff78aefec0e8c9265e844bad807a6}
     property-defs-rs:
-        image: ghcr.io/posthog/posthog/property-defs-rs@sha256:4a390f26dce2bea9f558b4440f8798ab3ec0cd47899ac5eafe3c02c642dc572a
+        image: ${PROPERTY_DEFS_RS_IMAGE:-ghcr.io/posthog/posthog/property-defs-rs@sha256:4a390f26dce2bea9f558b4440f8798ab3ec0cd47899ac5eafe3c02c642dc572a}
     feature-flags:
-        image: ghcr.io/posthog/posthog/feature-flags@sha256:74727bae504f3aba19cb4513cfd6dd2b4495bc1665b2ed61d0043797bca8ad7f
+        image: ${FEATURE_FLAGS_IMAGE:-ghcr.io/posthog/posthog/feature-flags@sha256:74727bae504f3aba19cb4513cfd6dd2b4495bc1665b2ed61d0043797bca8ad7f}
     personhog-replica:
-        image: ghcr.io/posthog/posthog/personhog-replica@sha256:4be6eba113033bdab46ac5245a8274a822019051999546e95403e575a5e4755c
+        image: ${PERSONHOG_REPLICA_IMAGE:-ghcr.io/posthog/posthog/personhog-replica@sha256:4be6eba113033bdab46ac5245a8274a822019051999546e95403e575a5e4755c}
     personhog-router:
-        image: ghcr.io/posthog/posthog/personhog-router@sha256:eb9de8a11f9f212300a4cba30e05c30bc8d2730de2dcaa9c5b72813c6da88e3c
+        image: ${PERSONHOG_ROUTER_IMAGE:-ghcr.io/posthog/posthog/personhog-router@sha256:eb9de8a11f9f212300a4cba30e05c30bc8d2730de2dcaa9c5b72813c6da88e3c}
     hypercache-server:
-        image: ghcr.io/posthog/posthog/hypercache-server@sha256:2ea417040f3605941f868c903ece83ff08d13b57765de637a40208fa7d4fbaea
+        image: ${HYPERCACHE_SERVER_IMAGE:-ghcr.io/posthog/posthog/hypercache-server@sha256:2ea417040f3605941f868c903ece83ff08d13b57765de637a40208fa7d4fbaea}
     cyclotron-janitor:
-        image: ghcr.io/posthog/posthog/cyclotron-janitor@sha256:3f01beadacdfa1bf8b4a715fc519768707950a168f1dd3303b91a7991f4ddec0
+        image: ${CYCLOTRON_JANITOR_IMAGE:-ghcr.io/posthog/posthog/cyclotron-janitor@sha256:3f01beadacdfa1bf8b4a715fc519768707950a168f1dd3303b91a7991f4ddec0}
     cymbal:
-        image: ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4
+        image: ${CYMBAL_IMAGE:-ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4}
     cymbal-resolution:
-        image: ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4
+        image: ${CYMBAL_IMAGE:-ghcr.io/posthog/posthog/cymbal@sha256:27135c6984f6d3e00cd1a090029bc7b5dc3f81f7193a4fc2bc2134e77ff785a4}
+
+    # --- PostHog MCP server (services/mcp) — lets AI clients (Claude, Cursor, etc.)
+    # query/manage this self-hosted instance over the Model Context Protocol. Not part
+    # of upstream's hobby stack at all (PostHog runs their own copy of this as a
+    # separate Cloudflare Worker + hosted service, not something they publish a
+    # prebuilt image for) — built locally via registry/build-mcp.sh and pinned to
+    # whatever MCP_IMAGE points at, defaulting to that script's own output tag.
+    # Session state needs Redis; reuses redis7 on a separate DB index (5) rather than
+    # a dedicated Redis container, since it's a small, non-critical cache.
+    mcp:
+        image: ${MCP_IMAGE:-localhost:5000/posthog-mcp:custom}
+        restart: always
+        environment:
+            REDIS_URL: redis://redis7:6379/5
+            POSTHOG_API_BASE_URL: http://web:8000
+            POSTHOG_PUBLIC_URL: https://$DOMAIN
+            MCP_APPS_BASE_URL: https://mcp.$DOMAIN
+            MCP_SIGNED_STATE_KEY: $MCP_SIGNED_STATE_KEY
+        depends_on:
+            - web
+            - redis7
+
+    # CADDY_EXTRA_CONFIG (defined in docker-compose.base.yml, defaults to empty) is
+    # appended verbatim after the main generated Caddyfile — the intended extension
+    # point for exactly this, so PostHog's own routing block never needs touching.
+    # Needs its own DNS A record (mcp.$DOMAIN -> this server's IP) before Caddy can
+    # issue a cert for it.
+    proxy:
+        environment:
+            CADDY_EXTRA_CONFIG: |
+                mcp.$DOMAIN {
+                    reverse_proxy mcp:3001
+                }
 
 volumes:
     clickhouse-data:
