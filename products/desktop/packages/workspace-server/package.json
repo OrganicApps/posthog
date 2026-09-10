@@ -41,7 +41,7 @@
     "inversify": "catalog:",
     "node-pty": "1.1.0",
     "reflect-metadata": "catalog:",
-    "smol-toml": "^1.6.0",
+    "smol-toml": "^1.7.1",
     "superjson": "catalog:",
     "zod": "^4.1.12"
   },
