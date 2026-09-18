@@ -6,7 +6,7 @@ positions:
   filename: /tmp/positions.yaml
 
 clients:
-  - url: https://loki-ext.myorganicapps.com/loki/api/v1/push
+  - url: "${LOKI_URL}"
     headers:
       CF-Access-Client-Id: "${LOKI_CF_ACCESS_CLIENT_ID}"
       CF-Access-Client-Secret: "${LOKI_CF_ACCESS_CLIENT_SECRET}"

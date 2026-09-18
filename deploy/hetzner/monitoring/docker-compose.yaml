@@ -2,7 +2,7 @@
 # this box's container logs + host metrics flowing into the existing org Loki/Prometheus
 # stack:
 #
-#   cd deploy/hetzner/monitoring && cp .env.example .env   # fill in the two CF-Access values
+#   cd deploy/hetzner/monitoring && cp .env.example .env   # fill in LOKI_URL and the CF-Access values
 #   docker compose up -d
 #
 services:
