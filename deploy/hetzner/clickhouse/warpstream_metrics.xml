@@ -1,0 +1,7 @@
+<clickhouse>
+    <named_collections>
+        <warpstream_metrics>
+            <kafka_broker_list from_env="KAFKA_HOSTS"/>
+        </warpstream_metrics>
+    </named_collections>
+</clickhouse>

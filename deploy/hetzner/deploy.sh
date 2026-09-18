@@ -55,6 +55,17 @@ TLS_STAGING="${TLS_STAGING:-}"          # set to any non-empty value to use LE s
 HEALTH_CHECK_RETRIES="${HEALTH_CHECK_RETRIES:-60}"   # 60 * 10s = 10 minutes, matches upstream's own budget
 HEALTH_CHECK_DELAY="${HEALTH_CHECK_DELAY:-10}"
 
+# Same pattern as the Rust image pins below, for the app image itself
+# (posthog/posthog and posthog/posthog-node — see docker-compose.pin.yml's
+# `migrate`/`web`/`worker`/etc. overrides for why this exists: upstream's own
+# compose files point at the floating `:latest` tag with no stable alternative
+# tag to pin to, so docker-compose.pin.yml pins by digest instead). Left unset,
+# docker-compose.pin.yml's own ${VAR:-digest} defaults apply — bump those
+# defaults deliberately (see the comment there) rather than passing this most
+# invocations.
+POSTHOG_IMAGE="${POSTHOG_IMAGE:-}"
+POSTHOG_NODE_IMAGE="${POSTHOG_NODE_IMAGE:-}"
+
 # Optional per-service Rust image overrides (default: the digest pins baked into
 # docker-compose.pin.yml). Set one of these to a locally-built image — e.g.
 # CAPTURE_IMAGE=localhost:5000/capture:custom — after running
@@ -78,16 +89,47 @@ cd "$DEPLOY_DIR"
 
 # ---------------------------------------------------------------------------
 # 1. Clone/update our fork at the pinned ref into ./posthog
+#
+# PREV_COMMIT is the checkout's HEAD *before* this run's update — kept so a
+# migration that blows up (see step 6, the migrate gate) can be rolled back at
+# the code level, not just .env. This is what the 2026-09-08 incident was
+# missing: upstream's 2026-09-07 migration squash broke ClickHouse startup,
+# and rolling back .env alone did nothing because the bug was baked into the
+# posthog/ checkout itself, not any env var.
 # ---------------------------------------------------------------------------
+FIRST_DEPLOY=false
+PREV_COMMIT=""
 if [ ! -d posthog/.git ]; then
     log "Cloning $POSTHOG_REPO_URL @ $POSTHOG_REF"
     git clone --filter=blob:none --branch "$POSTHOG_REF" "$POSTHOG_REPO_URL" posthog
+    FIRST_DEPLOY=true
 else
+    PREV_COMMIT="$(cd posthog && git rev-parse HEAD)"
     log "Updating existing checkout to $POSTHOG_REF"
     (cd posthog && git fetch origin "$POSTHOG_REF" && git checkout "$POSTHOG_REF" && git reset --hard "origin/$POSTHOG_REF")
 fi
+# No running web container yet (e.g. a previous deploy never got past the
+# migrate gate) — nothing live to protect, so skip the gate below and behave
+# like a first deploy.
+docker ps -q -f name=posthog-platform-web-1 2>/dev/null | grep -q . || FIRST_DEPLOY=true
 POSTHOG_COMMIT="$(cd posthog && git rev-parse --short HEAD)"
 log "posthog/ is at commit $POSTHOG_COMMIT"
+
+revert_checkout() {
+    if [ -n "$PREV_COMMIT" ]; then
+        log "Reverting posthog/ checkout to previous commit $PREV_COMMIT"
+        (cd posthog && git reset --hard "$PREV_COMMIT")
+        cp posthog/docker-compose.base.yml docker-compose.base.yml
+        cp posthog/docker-compose.hobby.yml docker-compose.yml
+        cp posthog/.env.services .env.services
+        cp posthog/deploy/hetzner/docker-compose.pin.yml docker-compose.pin.yml
+        rm -rf compose
+        cp -r posthog/deploy/hetzner/compose compose
+        chmod +x compose/start compose/wait compose/temporal-django-worker
+    else
+        log "No previous commit recorded — cannot revert the checkout"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # 2. Stage compose files at deploy root (mirrors bin/deploy-hobby's own layout)
@@ -164,6 +206,8 @@ umask 077
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY"
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET"
     [ -n "$MULTI_ORG_ENABLED" ] && echo "MULTI_ORG_ENABLED=$MULTI_ORG_ENABLED"
+    [ -n "$POSTHOG_IMAGE" ] && echo "POSTHOG_IMAGE=$POSTHOG_IMAGE"
+    [ -n "$POSTHOG_NODE_IMAGE" ] && echo "POSTHOG_NODE_IMAGE=$POSTHOG_NODE_IMAGE"
     [ -n "$MCP_IMAGE" ] && echo "MCP_IMAGE=$MCP_IMAGE"
     [ -n "$CAPTURE_IMAGE" ] && echo "CAPTURE_IMAGE=$CAPTURE_IMAGE"
     [ -n "$CAPTURE_LOGS_IMAGE" ] && echo "CAPTURE_LOGS_IMAGE=$CAPTURE_LOGS_IMAGE"
@@ -178,17 +222,44 @@ umask 077
 chmod 600 .env
 
 # ---------------------------------------------------------------------------
-# 6. Bring the stack up
+# 6. Migrate gate, then bring the stack up.
+#
+# web's entrypoint (compose/start) is wait -> bin/migrate -> bin/docker-server,
+# and bin/migrate runs on every single container start, not just on deploy —
+# so a bad migration doesn't just break this deploy, it crash-loops web on
+# every future restart until fixed. `docker compose up -d` would recreate web
+# immediately and only find that out once the live site is already down.
+#
+# Instead: pull the new images, then run bin/migrate as a disposable one-off
+# container (`compose run`) against the ALREADY-RUNNING db/clickhouse/etc —
+# the live web container is untouched while this runs. Only if that succeeds
+# do we call `up -d` and let it recreate web for real. A migration failure
+# here means zero downtime: the old web keeps serving the whole time, and we
+# revert the checkout so the next deploy attempt doesn't just hit the same bug.
 # ---------------------------------------------------------------------------
 COMPOSE="docker compose -f docker-compose.base.yml -f docker-compose.yml -f docker-compose.pin.yml"
 
-log "Pulling images and starting stack..."
-if ! $COMPOSE up -d --pull always --remove-orphans; then
-    log "docker compose up failed — attempting rollback to previous .env"
+log "Pulling images..."
+$COMPOSE pull
+
+if [ "$FIRST_DEPLOY" = false ]; then
+    log "Running migrate gate against the new image (live web untouched until this passes)..."
+    if ! $COMPOSE run --rm --no-deps web ./bin/migrate; then
+        log "ERROR: migrate gate failed — new code/migrations are broken, leaving the current live stack untouched"
+        revert_checkout
+        exit 1
+    fi
+    log "Migrate gate passed"
+fi
+
+log "Starting stack..."
+if ! $COMPOSE up -d --remove-orphans; then
+    log "docker compose up failed — attempting rollback to previous .env and commit"
     if [ -f .env.prev ]; then
         mv .env.prev .env
-        $COMPOSE up -d --remove-orphans || true
     fi
+    revert_checkout
+    $COMPOSE up -d --remove-orphans || true
     exit 1
 fi
 
@@ -210,9 +281,10 @@ if [ "$healthy" = true ]; then
 else
     log "ERROR: /_health did not return 200 in time"
     $COMPOSE logs --tail 100
-    if [ -f .env.prev ] && ! cmp -s .env .env.prev; then
-        log "Rolling back to previous .env"
-        mv .env.prev .env
+    if { [ -f .env.prev ] && ! cmp -s .env .env.prev; } || [ -n "$PREV_COMMIT" ]; then
+        log "Rolling back to previous .env and commit"
+        [ -f .env.prev ] && mv .env.prev .env
+        revert_checkout
         $COMPOSE up -d --remove-orphans
         sleep 30
         if curl -sf -o /dev/null "http://localhost/_health"; then
@@ -221,7 +293,7 @@ else
             log "ERROR: rollback did not recover health — manual intervention needed"
         fi
     else
-        log "No usable .env.prev — cannot roll back automatically"
+        log "No usable .env.prev or previous commit — cannot roll back automatically"
     fi
     exit 1
 fi

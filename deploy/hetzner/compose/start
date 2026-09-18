@@ -1,6 +1,12 @@
 #!/bin/bash
 # Same entrypoint bin/deploy-hobby generates dynamically — committed here as a static
 # file since deploy.sh doesn't run the upstream installer.
-./compose/wait
+#
+# /compose/wait is an absolute path: hobby.yml mounts our ./compose dir at /compose
+# (not at ./compose relative to the image's own WORKDIR, which is where bin/migrate
+# and bin/docker-server actually live) — a relative ./compose/wait here silently
+# fails with "No such file or directory" and, since this script has no `set -e`,
+# just skips straight to migrate without ever waiting on ClickHouse/Postgres.
+/compose/wait
 ./bin/migrate
 ./bin/docker-server
