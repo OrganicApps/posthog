@@ -55,10 +55,38 @@ services:
     # actually keeps them from running (our own compose/start runs migrations inline
     # inside the web container instead, matching bin/deploy-hobby's own approach — these
     # two services are never meant to start here, they just need a valid image to parse).
+    # --- Pin the app image itself: docker-compose.hobby.yml/base.yml hardcode
+    # `$REGISTRY_URL:$POSTHOG_APP_TAG`, which with deploy.sh's own defaults
+    # (REGISTRY_URL=posthog/posthog, POSTHOG_APP_TAG=latest) means the OFFICIAL
+    # posthog/posthog:latest image from Docker Hub — published by PostHog on their
+    # own schedule, not built from this fork's checkout at all. `latest` is a
+    # floating tag with no matching semver/release tag on Docker Hub to pin to
+    # instead (checked: no release-X.Y.Z tag exists), and it moves independently
+    # of anything in this repo — every `docker compose pull` silently picks up
+    # whatever PostHog shipped since the last deploy.
+    #
+    # 2026-09-08 incident: a migration bundled into whatever `latest` pointed to
+    # that day referenced a ClickHouse named collection (warpstream_metrics) that
+    # was never defined for hobby-style single-node config — crash-looped `web` on
+    # every restart, 502 in prod, and rollback couldn't fix it because the broken
+    # code was IN the image, not in any config we controlled (see the ClickHouse
+    # volumes comment below for the actual fix). The migrate gate in deploy.sh
+    # (step 6) now catches breakage like this before it touches the live site, but
+    # doesn't stop us from silently riding whatever version Docker Hub feels like
+    # serving that day — pinning to a specific, already-verified-healthy digest
+    # does. POSTHOG_IMAGE/POSTHOG_NODE_IMAGE below default to the digests running
+    # in prod as of 2026-09-08 (confirmed healthy post-incident); bump them
+    # deliberately — `docker pull posthog/posthog:latest && docker inspect
+    # --format '{{index .RepoDigests 0}}' posthog/posthog:latest` — when you
+    # actually want a newer PostHog version, not as a side effect of a redeploy.
     migrate:
-        image: $REGISTRY_URL:$POSTHOG_APP_TAG
+        image: ${POSTHOG_IMAGE:-posthog/posthog@sha256:623258d64ea5030662956fbce45b823fbab7103a119c68a3b7e99b74150b7c52}
     asyncmigrationscheck:
-        image: $REGISTRY_URL:$POSTHOG_APP_TAG
+        image: ${POSTHOG_IMAGE:-posthog/posthog@sha256:623258d64ea5030662956fbce45b823fbab7103a119c68a3b7e99b74150b7c52}
+    worker:
+        image: ${POSTHOG_IMAGE:-posthog/posthog@sha256:623258d64ea5030662956fbce45b823fbab7103a119c68a3b7e99b74150b7c52}
+    temporal-django-worker:
+        image: ${POSTHOG_IMAGE:-posthog/posthog@sha256:623258d64ea5030662956fbce45b823fbab7103a119c68a3b7e99b74150b7c52}
 
     # --- Upstream gap: docker-compose.hobby.yml's web environment block never
     # forwards Google SSO credentials (ee/settings.py reads them as plain env vars,
@@ -67,6 +95,7 @@ services:
     # off (get_instance_available_sso_providers requires both to be truthy) until
     # explicitly configured.
     web:
+        image: ${POSTHOG_IMAGE:-posthog/posthog@sha256:623258d64ea5030662956fbce45b823fbab7103a119c68a3b7e99b74150b7c52}
         environment:
             SOCIAL_AUTH_GOOGLE_OAUTH2_KEY: ${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}
             SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET: ${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}
@@ -80,7 +109,7 @@ services:
         extends:
             file: docker-compose.base.yml
             service: ingestion-ai
-        image: ${REGISTRY_URL}-node:${POSTHOG_NODE_TAG:-latest}
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         environment:
             ENCRYPTION_SALT_KEYS: $ENCRYPTION_SALT_KEYS
             # base.yml never sets this for ingestion-ai (only docker-compose.dev.yml
@@ -103,6 +132,7 @@ services:
     # process exits(0) on that error — restart:on-failure doesn't retry a clean exit,
     # so it just stays down until the next `docker compose up`.
     plugins:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         environment:
             LOGS_REDIS_HOST: redis7
             # LogsIngestionConsumer defaults LOGS_REDIS_TLS to true whenever NODE_ENV
@@ -126,12 +156,14 @@ services:
     # `restart: always` closes that gap — cheap insurance, no downside for services
     # that are supposed to run forever.
     ingestion-logs:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         # Same LOGS_REDIS_TLS fail-open-to-TLS issue as plugins above — this is the
         # standalone version of the same LogsIngestionConsumer.
         environment:
             LOGS_REDIS_TLS: 'false'
         restart: always
     ingestion-traces:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         # TRACES_REDIS_HOST mirrors LOGS_REDIS_HOST (base.yml sets it directly for this
         # service) — same naming family strongly suggests the same TLS-defaults-on-in-
         # prod footgun in whatever consumer class backs traces ingestion. Restart count
@@ -141,11 +173,16 @@ services:
             TRACES_REDIS_TLS: 'false'
         restart: always
     ingestion-general:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         restart: always
     ingestion-sessionreplay:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         restart: always
     ingestion-error-tracking:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
         restart: always
+    recording-api:
+        image: ${POSTHOG_NODE_IMAGE:-posthog/posthog-node@sha256:863e76e040ad41aef79f605c33ec71f1529bddf94cfd88941c935da9bde97235}
 
     # --- otel-collector has no working config in either base.yml or docker-compose.yml
     # for a non-dev topology — base.yml's command references
@@ -281,12 +318,24 @@ services:
     # of an anonymous Docker volume, and cap memory inside ClickHouse's own config
     # rather than via a Docker mem_limit, so it degrades gracefully under a heavy
     # merge/mutation storm instead of getting OOM-killed. ---
+    # --- Upstream gap: migration 0309_metrics_kafka_ingest (landed in the 2026-09-07
+    # squash) creates a Kafka-engine table using named_collection="warpstream_metrics",
+    # but config.d/default.xml only defines the 8 sibling collections (msk_cluster,
+    # warpstream_ingestion/calculated_events/replay/shared/cyclotron/logs/traces) —
+    # warpstream_metrics itself was never added. bin/migrate has `set -e`, so
+    # migrate_clickhouse failing with "There is no named collection `warpstream_metrics`"
+    # takes down the whole `web` entrypoint (compose/start -> bin/migrate ->
+    # bin/docker-server never reached) — crash-loops web forever, 502 at the proxy, no
+    # amount of `.env` rollback fixes it since the bug is in the migration code itself.
+    # Extra config.d fragment (ClickHouse loads every file in that directory, not just
+    # default.xml) defining the missing collection identically to its siblings.
     clickhouse:
         volumes:
             - ./posthog/posthog/idl:/idl
             - ./posthog/docker/clickhouse/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
             - ./posthog/docker/clickhouse/config.xml:/etc/clickhouse-server/config.xml
             - ./posthog/docker/clickhouse/config.d/default.xml:/etc/clickhouse-server/config.d/default.xml
+            - ./posthog/deploy/hetzner/clickhouse/warpstream_metrics.xml:/etc/clickhouse-server/config.d/warpstream_metrics.xml
             - ./posthog/docker/clickhouse/users.xml:/etc/clickhouse-server/users.xml
             - ./posthog/docker/clickhouse/user_defined_function.xml:/etc/clickhouse-server/user_defined_function.xml
             - ./posthog/posthog/user_scripts:/var/lib/clickhouse/user_scripts
