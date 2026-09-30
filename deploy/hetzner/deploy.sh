@@ -51,6 +51,7 @@ OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY="${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}"
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET="${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}"
 MULTI_ORG_ENABLED="${MULTI_ORG_ENABLED:-}"
+NGINX_UNIT_APP_PROCESSES="${NGINX_UNIT_APP_PROCESSES:-}"
 TLS_STAGING="${TLS_STAGING:-}"          # set to any non-empty value to use LE staging (testing only)
 HEALTH_CHECK_RETRIES="${HEALTH_CHECK_RETRIES:-60}"   # 60 * 10s = 10 minutes, matches upstream's own budget
 HEALTH_CHECK_DELAY="${HEALTH_CHECK_DELAY:-10}"
@@ -141,7 +142,7 @@ cp posthog/deploy/hetzner/docker-compose.pin.yml docker-compose.pin.yml
 
 rm -rf compose
 cp -r posthog/deploy/hetzner/compose compose
-chmod +x compose/start compose/wait compose/temporal-django-worker
+chmod +x compose/start compose/wait compose/temporal-django-worker compose/temporal-analytics-platform-worker
 
 # ---------------------------------------------------------------------------
 # 3. GeoIP DB (same source as bin/deploy-hobby)
@@ -206,6 +207,7 @@ umask 077
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=$SOCIAL_AUTH_GOOGLE_OAUTH2_KEY"
     [ -n "$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET" ] && echo "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=$SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET"
     [ -n "$MULTI_ORG_ENABLED" ] && echo "MULTI_ORG_ENABLED=$MULTI_ORG_ENABLED"
+    [ -n "$NGINX_UNIT_APP_PROCESSES" ] && echo "NGINX_UNIT_APP_PROCESSES=$NGINX_UNIT_APP_PROCESSES"
     [ -n "$POSTHOG_IMAGE" ] && echo "POSTHOG_IMAGE=$POSTHOG_IMAGE"
     [ -n "$POSTHOG_NODE_IMAGE" ] && echo "POSTHOG_NODE_IMAGE=$POSTHOG_NODE_IMAGE"
     [ -n "$MCP_IMAGE" ] && echo "MCP_IMAGE=$MCP_IMAGE"
@@ -309,5 +311,34 @@ from posthog.models import Team
 Team.objects.exclude(session_recording_retention_period='$SESSION_RECORDING_RETENTION').update(session_recording_retention_period='$SESSION_RECORDING_RETENTION')
 print('done')
 " || log "WARNING: could not set retention (non-fatal, check manually)"
+
+# ---------------------------------------------------------------------------
+# 9. Temporal Schedules (e.g. the weekly dashboard-subscription check) — bin/migrate
+#    inside the image unconditionally skips `manage.py schedule_temporal_workflows`
+#    whenever DEPLOYMENT=hobby ("no Temporal cluster" — wrong for us, we run a real
+#    one). Without this, init_schedules() never creates schedule-all-subscriptions-
+#    schedule and dashboard email subscriptions silently never fire on their own.
+#    The command is idempotent (create-or-update per schedule) per its own docstring,
+#    so it's safe to just run it ourselves on every deploy instead of patching
+#    upstream's script.
+#
+#    2026-09-29 incident: schedule_temporal_workflows itself failed outright with
+#    "Namespace default has no mapping defined for search attribute
+#    PostHogScheduleType" — Temporal custom search attributes
+#    (posthog/temporal/common/search_attributes.py) are namespace-level config that
+#    PostHog Cloud's own provisioning sets up out of band; nothing in bin/deploy-hobby
+#    or docker-compose.hobby.yml ever registers them for a self-hosted namespace.
+#    Because init_schedules() aborts on the FIRST schedule that fails, this one
+#    missing attribute silently blocked EVERY schedule in the whole instance, not
+#    just subscriptions (experiments metrics, health checks, billing alerts, quota
+#    limiting, weekly digests, error-tracking cleanup — dozens of features). Must
+#    run before schedule_temporal_workflows on every deploy; also idempotent
+#    (registering an already-registered attribute is a no-op).
+# ---------------------------------------------------------------------------
+log "Registering Temporal custom search attributes (namespace-level, needed before any schedule can be created)"
+$COMPOSE exec -T web python manage.py register_temporal_search_attributes || log "WARNING: could not register Temporal search attributes (non-fatal, check manually — schedule_temporal_workflows below will likely fail without this)"
+
+log "Registering Temporal Schedules (bypasses bin/migrate's hobby-mode skip)"
+$COMPOSE exec -T web python manage.py schedule_temporal_workflows || log "WARNING: could not register Temporal Schedules (non-fatal, check manually)"
 
 log "Deploy complete: https://$DOMAIN"
