@@ -134,6 +134,8 @@ services:
             FLAGS_REDIS_URL: ${FLAGS_REDIS_URL:-redis://redis7:6379/1}
             SOCIAL_AUTH_GOOGLE_OAUTH2_KEY: ${SOCIAL_AUTH_GOOGLE_OAUTH2_KEY:-}
             SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET: ${SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET:-}
+            # OAuth/OIDC signing key (generated once by deploy.sh into .env.secrets); needed for OAuth apps and MCP DCR
+            OIDC_RSA_PRIVATE_KEY: ${OIDC_RSA_PRIVATE_KEY:-}
             # Off by default (matches upstream's own default) — the "New project" button is
             # gated on preflight's can_create_org, which requires this AND a license with the
             # ZAPIER feature (see posthog/utils.py get_can_create_org). Set to true to allow

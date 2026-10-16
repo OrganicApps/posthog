@@ -179,6 +179,10 @@ ensure_secret POSTHOG_SECRET "$(head -c 28 /dev/urandom | sha224sum -b | head -c
 ensure_secret ENCRYPTION_SALT_KEYS "$(openssl rand -hex 16)"
 ensure_secret BROWSERLESS_SECRET "$(openssl rand -hex 32)"
 ensure_secret MCP_SIGNED_STATE_KEY "$(openssl rand -hex 32)"
+# RSA key that signs OIDC/OAuth tokens. Without it OAuthApplication.save() fails ("You must set
+# OIDC_RSA_PRIVATE_KEY to use RSA algorithm"), so /oauth/register/ (MCP clients, DCR) returns 500.
+# Stored on one line with literal \n (.env is line-based) — posthog/settings/web.py turns them back into newlines.
+ensure_secret OIDC_RSA_PRIVATE_KEY "$(openssl genrsa 2048 2>/dev/null | sed -z 's/\n/\\n/g')"
 
 # ---------------------------------------------------------------------------
 # 5. Rebuild .env every deploy: persisted secrets + this run's config. Save the
