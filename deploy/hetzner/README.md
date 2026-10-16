@@ -37,7 +37,7 @@ starts from a more comfortable place than the others did.
 `docker-compose.pin.yml` runs `services/mcp` (not part of upstream's hobby stack —
 PostHog hosts their own copy separately, no prebuilt image exists) as an extra `mcp`
 service, reachable at `https://mcp.$DOMAIN`, wired to this instance's own API
-(`POSTHOG_API_BASE_URL=http://web:8000`, internal). Setup:
+(`POSTHOG_API_BASE_URL=https://$DOMAIN` — public on purpose: it is also advertised as the OAuth authorization server, so clients can sign in with their own PostHog account via OAuth instead of a personal API key). Setup:
 
 1. Add a DNS A record: `mcp.<your domain>` → this server's IP (same as the main
    domain, just a second record — Caddy auto-provisions its own cert for it via the

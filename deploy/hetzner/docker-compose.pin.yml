@@ -522,7 +522,9 @@ services:
         restart: always
         environment:
             REDIS_URL: redis://redis7:6379/5
-            POSTHOG_API_BASE_URL: http://web:8000
+            # Public URL, not http://web:8000: the MCP server advertises this as its OAuth
+            # authorization_servers, so an internal address breaks OAuth for every client.
+            POSTHOG_API_BASE_URL: https://$DOMAIN
             POSTHOG_PUBLIC_URL: https://$DOMAIN
             MCP_APPS_BASE_URL: https://mcp.$DOMAIN
             MCP_SIGNED_STATE_KEY: $MCP_SIGNED_STATE_KEY
